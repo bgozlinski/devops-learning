@@ -1,0 +1,73 @@
+## Pushing changes (push)
+
+```bash
+# First push of a branch + set up tracking (-u)
+git push -u origin master
+git push origin develop
+git push origin v1.0.0          # push the tag
+
+# Pushing a feature branch
+git checkout -b feature/api-docs
+git add api.md && git commit -m "Add API documentation"
+git push -u origin feature/api-docs
+```
+
+`origin` is the default name for the remote repository (set during `git clone` or `git remote add`). The `-u` flag (`--set-upstream`) links the local branch to the remote one, so subsequent `git push`/`git pull` do not require specifying names.
+
+## Pulling changes (pull, fetch)
+
+```bash
+# Fetch — downloads commits without merging (a safe preview)
+git fetch origin
+
+# Pull — fetch + merge into the current branch
+git pull origin feature/api-docs
+git pull origin develop
+```
+
+Difference: `git fetch` only updates the remote references (`origin/*`), letting you inspect changes before merging. `git pull` = `fetch` + automatic `merge` into the current branch.
+
+## How to create a Pull Request (PR/MR)
+
+1. Push the feature branch: `git push -u origin feature/api-docs`.
+2. In response to the push, GitHub provides a ready link: `https://github.com/<user>/<repo>/pull/new/feature/api-docs`.
+3. In the PR form set the **base** (target branch, e.g. `develop`) and **compare** (source branch, `feature/api-docs`).
+4. Add a title and a description of the changes, optionally request a review (Reviewers).
+5. **Create pull request**. After approval: **Merge pull request** -> **Confirm merge**.
+
+In this task, PR #1 was created (`feature/api-docs` -> `develop`), merged, and the local `develop` was updated with `git pull origin develop`.
+
+## Cleanup after merging
+
+```bash
+git checkout develop
+git pull origin develop                       # pull the merged changes
+git branch -d feature/api-docs                # delete the local branch (only if merged)
+git push origin --delete feature/api-docs     # delete the remote branch
+```
+
+## Simulating a second developer
+
+To simulate teamwork, the repository was cloned into a separate directory with a different identity:
+
+```bash
+git clone git@github.com:bgozlinski/devops_project.git ~/colleague_project
+cd ~/colleague_project
+git config user.name "Colleague Dev"
+git config user.email "colleague@learning.com"
+git checkout feature/api-docs
+echo "Additional info" >> api.md
+git add api.md && git commit -m "Enhance API docs"
+git push origin feature/api-docs
+```
+
+The first developer then pulled the colleague's change with `git pull origin feature/api-docs` (fast-forward), obtaining both contributions in `api.md`.
+
+## Best practices for the team
+
+- One `feature/*` branch = one logical change; short-lived, merged often.
+- Always `git pull` before starting work and before pushing, to avoid divergence.
+- A PR with a description and review instead of pushing directly to `develop`/`master`.
+- After merging a PR, delete the branch (locally and remotely) to keep the repo tidy.
+- Never `rebase`/`force-push` on shared branches (`master`, `develop`).
+- Consistent, descriptive commit messages (e.g. the Conventional Commits convention: `feat:`, `fix:`, `docs:`).
