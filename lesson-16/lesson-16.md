@@ -282,8 +282,3 @@ mysql -e "SHOW TABLE STATUS FROM blog\G"
 - **MySQL option files treat `#` as a comment start** — always quote passwords containing special characters in `.my.cnf`.
 - **`--no-tablespaces`** is the standard flag when dumping with least-privilege accounts on MySQL 8+.
 - **A backup is only real after a restore test** — the `blog_restore` round-trip confirmed the dump is usable, not just present.
-
-## Next steps
-
-- Schedule `mysql_backup.sh` via cron or a systemd timer (daily full dump).
-- Lesson 17 preview: PostgreSQL in depth, NoSQL (MongoDB, Redis), replication and fault tolerance.
