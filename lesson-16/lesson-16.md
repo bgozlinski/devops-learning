@@ -269,10 +269,6 @@ mysql -e "SHOW TABLE STATUS FROM blog\G"
 
 `SHOW TABLE STATUS` interpretation: all tables on InnoDB engine; `Rows` values are estimates (InnoDB doesn't keep exact counts); `Auto_increment` shows the next ID to be assigned; `Collation: utf8mb4_unicode_ci` confirms encoding; `Index_length` grows with added indexes (e.g. 32 KB on `comments` after indexing `post_id`).
 
-### Documentation
-
-`~/backups/DB_ADMIN.md` created on the VM, covering the user/privilege matrix, backup procedure (including the option-file quoting caveat and grant-scope restore limitation), and monitoring commands.
-
 ---
 
 ## Key takeaways
