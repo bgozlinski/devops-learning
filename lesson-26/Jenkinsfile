@@ -1,0 +1,180 @@
+// Lekcja 26 - zadanie domowe 1
+// Pipeline: Checkout -> Build -> Test -> Deploy
+// z obsluga bledow (try-catch + post), warunkowym wykonywaniem etapow
+// i powiadomieniami e-mail.
+
+// Wysyla powiadomienie e-mail i zapisuje je w logu konsoli.
+// Kazde powiadomienie zawiera wynik builda, czas wykonania i autora ostatniej zmiany.
+def notify(String status, String message) {
+    def subject = "[${status}] ${env.APP_NAME} ${env.APP_VERSION} - build #${env.BUILD_NUMBER}"
+    def body = """${message}
+
+Wynik        : ${currentBuild.currentResult}
+Srodowisko   : ${env.DEPLOY_ENV}
+Autor zmiany : ${env.GIT_AUTHOR ?: 'nieznany'}
+Commit       : ${env.GIT_COMMIT_MSG ?: '-'}
+Czas         : ${currentBuild.durationString}
+Build URL    : ${env.BUILD_URL}
+"""
+    echo "${subject}\n${body}"
+
+    // Brak skonfigurowanego SMTP nie powinien wywracac calego builda,
+    // dlatego samo wyslanie maila tez jest w try-catch.
+    try {
+        mail to: env.NOTIFY_EMAIL, subject: subject, body: body
+    } catch (Exception e) {
+        echo "Nie udalo sie wyslac e-maila: ${e.message}"
+    }
+}
+
+pipeline {
+    agent any
+
+    environment {
+        APP_NAME     = 'lesson-26-cart'
+        APP_VERSION  = '1.0.0'
+        DEPLOY_ENV   = 'staging'          // dev / staging / production
+        GIT_REPO     = 'https://github.com/bgozlinski/devops-learning.git'
+        GIT_BRANCH   = 'main'
+        APP_DIR      = 'lesson-26/app'
+        NOTIFY_EMAIL = 'bartlomiej.gozlinski@gmail.com'
+    }
+
+    // Wyniki etapow (CHECKOUT_RESULT, BUILD_RESULT, TEST_RESULT, DEPLOY_RESULT)
+    // sa ustawiane dopiero w trakcie dzialania pipeline'u i czytane w warunkach when.
+    // Nie moga byc zadeklarowane w bloku environment powyzej: Jenkins nakłada te
+    // wartosci na kazdy etap od nowa, wiec przykrylyby przypisania z etapow
+    // i wszystkie warunki widzialyby caly czas wartosc poczatkowa.
+
+    stages {
+
+        // 1. Pobranie kodu z publicznego repozytorium.
+        stage('Checkout') {
+            steps {
+                script {
+                    try {
+                        git url: env.GIT_REPO, branch: env.GIT_BRANCH
+
+                        // Dane do powiadomien - autor i opis ostatniego commita.
+                        env.GIT_AUTHOR = sh(script: 'git log -1 --pretty=%an', returnStdout: true).trim()
+                        env.GIT_COMMIT_MSG = sh(script: 'git log -1 --pretty=%s', returnStdout: true).trim()
+
+                        env.CHECKOUT_RESULT = 'SUCCESS'
+                    } catch (Exception e) {
+                        env.CHECKOUT_RESULT = 'FAILURE'
+                        currentBuild.result = 'FAILURE'
+                        error("Checkout nie powiodl sie: ${e.message}")
+                    }
+                }
+            }
+        }
+
+        // 2. Build - kompilacja zrodel i przygotowanie katalogu build.
+        //    Uruchamiany tylko wtedy, gdy checkout sie udal.
+        stage('Build') {
+            when {
+                expression { env.CHECKOUT_RESULT == 'SUCCESS' }
+            }
+            steps {
+                script {
+                    try {
+                        sh "python3 -m compileall -q ${env.APP_DIR}"
+                        sh """
+                            mkdir -p build
+                            echo "app=${env.APP_NAME}" > build/build-info.txt
+                            echo "version=${env.APP_VERSION}" >> build/build-info.txt
+                            echo "environment=${env.DEPLOY_ENV}" >> build/build-info.txt
+                            echo "build=${env.BUILD_NUMBER}" >> build/build-info.txt
+                        """
+                        archiveArtifacts artifacts: 'build/**', fingerprint: true
+
+                        env.BUILD_RESULT = 'SUCCESS'
+                    } catch (Exception e) {
+                        env.BUILD_RESULT = 'FAILURE'
+                        currentBuild.result = 'FAILURE'
+                        error("Build nie powiodl sie: ${e.message}")
+                    }
+                }
+            }
+        }
+
+        // 3. Test - testy jednostkowe aplikacji z katalogu app/.
+        //    Nieudane testy nie przerywaja pipeline'u: build jest oznaczany jako
+        //    UNSTABLE, a etap Deploy nie zostanie wykonany (warunek ponizej).
+        stage('Test') {
+            when {
+                expression { env.BUILD_RESULT == 'SUCCESS' }
+            }
+            steps {
+                script {
+                    try {
+                        sh "cd ${env.APP_DIR} && python3 -m pytest -v --junitxml=${env.WORKSPACE}/test-results/results.xml"
+                        env.TEST_RESULT = 'SUCCESS'
+                    } catch (Exception e) {
+                        env.TEST_RESULT = 'FAILURE'
+                        currentBuild.result = 'UNSTABLE'
+                        echo "Testy nie przeszly: ${e.message}"
+                    }
+                }
+            }
+        }
+
+        // 4. Deploy - symulacja wdrozenia (kopiowanie artefaktu do katalogu deploy).
+        //    Warunki: testy musza byc zielone ORAZ zmienna DEPLOY_ENV musi
+        //    wskazywac na srodowisko staging.
+        stage('Deploy') {
+            when {
+                allOf {
+                    expression { env.TEST_RESULT == 'SUCCESS' }
+                    environment name: 'DEPLOY_ENV', value: 'staging'
+                }
+            }
+            steps {
+                script {
+                    try {
+                        sh """
+                            mkdir -p deploy
+                            cp build/build-info.txt deploy/deployed.txt
+                            echo "Wdrozono ${env.APP_NAME} ${env.APP_VERSION} na ${env.DEPLOY_ENV}"
+                        """
+                        env.DEPLOY_RESULT = 'SUCCESS'
+
+                        // Powiadomienie po pomyslnym wdrozeniu.
+                        notify('SUCCESS', "Wdrozenie ${env.APP_NAME} ${env.APP_VERSION} na ${env.DEPLOY_ENV} zakonczone powodzeniem.")
+                    } catch (Exception e) {
+                        env.DEPLOY_RESULT = 'FAILURE'
+                        currentBuild.result = 'FAILURE'
+                        error("Deploy nie powiodl sie: ${e.message}")
+                    }
+                }
+            }
+        }
+    }
+
+    // Zdarzenia dla calego pipeline'u.
+    post {
+        always {
+            junit testResults: 'test-results/*.xml', allowEmptyResults: true
+            echo """Podsumowanie pipeline'u:
+ Checkout : ${env.CHECKOUT_RESULT ?: 'POMINIETY'}
+ Build    : ${env.BUILD_RESULT ?: 'POMINIETY'}
+ Test     : ${env.TEST_RESULT ?: 'POMINIETY'}
+ Deploy   : ${env.DEPLOY_RESULT ?: 'POMINIETY'}
+ Wynik    : ${currentBuild.currentResult}
+ Czas     : ${currentBuild.durationString}"""
+        }
+        success {
+            echo 'Pipeline zakonczony powodzeniem.'
+        }
+        unstable {
+            script {
+                notify('UNSTABLE', 'Testy nie przeszly - wdrozenie zostalo pominiete.')
+            }
+        }
+        failure {
+            script {
+                notify('FAILURE', 'Pipeline zakonczony niepowodzeniem.')
+            }
+        }
+    }
+}
