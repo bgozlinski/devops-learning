@@ -1,6 +1,12 @@
+# Local reproduction of the "test" job (lint + unit tests) without GitHub.
+#   docker build -f Dockerfile.ci -t lesson25-ci .
+#   docker run --rm lesson25-ci
 ARG PY=3.12
 FROM python:${PY}-slim
+
 WORKDIR /app
 RUN pip install --no-cache-dir pytest flake8
-COPY lesson-23/python-hw23/ .
-CMD flake8 . --max-line-length=100 && pytest -v
+
+COPY app/ ./
+
+CMD ["sh", "-c", "flake8 . --max-line-length=100 && pytest -v"]

@@ -1,0 +1,212 @@
+name: Lesson 25 - CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'lesson-25/**'
+    paths:
+      - 'lesson-25/**'
+      - '.github/workflows/lesson-25-ci.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'lesson-25/**'
+      - '.github/workflows/lesson-25-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lesson-25-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_NAME: lesson25-app
+  APP_DIR: lesson-25/app
+  APP_VERSION: "1.0.0"
+  PYTHON_VERSION: "3.12"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ---------------------------------------------------------------- 1. BUILD
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_main: ${{ steps.version.outputs.is_main }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Compile sources (syntax check)
+        run: python -m compileall -q "$APP_DIR"
+
+      - name: Determine version
+        id: version
+        run: |
+          VERSION="${APP_VERSION}-$(git rev-parse --short HEAD)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            echo "is_main=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_main=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Build version: $VERSION"
+
+      - name: Package application
+        run: |
+          mkdir -p dist
+          cp "$APP_DIR"/*.py dist/
+          rm -f dist/test_*.py
+          {
+            echo "app=${APP_NAME}"
+            echo "version=${{ steps.version.outputs.version }}"
+            echo "commit=${GITHUB_SHA}"
+            echo "branch=${GITHUB_REF_NAME}"
+            echo "built=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          } > dist/BUILD_INFO
+          tar czf "${APP_NAME}-${{ steps.version.outputs.version }}.tar.gz" -C dist .
+          ls -la ./*.tar.gz
+
+      # Conditional artifact: the package is kept only for the main branch.
+      - name: Upload build artifact (main only)
+        if: steps.version.outputs.is_main == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-build
+          path: ${{ env.APP_NAME }}-*.tar.gz
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Note - artifact skipped
+        if: steps.version.outputs.is_main != 'true'
+        run: echo "::notice::Branch is not main - build artifact was not uploaded."
+
+  # ----------------------------------------------------------------- 2. TEST
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test tools
+        run: pip install --quiet pytest flake8
+
+      - name: Lint (flake8)
+        run: flake8 "$APP_DIR" --max-line-length=100
+
+      - name: Run tests
+        working-directory: ${{ env.APP_DIR }}
+        run: pytest -v --junitxml=../test-report-${{ matrix.python-version }}.xml
+
+      # Conditional artifact: test reports are kept only for the main branch.
+      - name: Upload test report (main only)
+        if: always() && needs.build.outputs.is_main == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-py${{ matrix.python-version }}
+          path: lesson-25/test-report-${{ matrix.python-version }}.xml
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Report failure
+        if: failure()
+        run: echo "::error::Tests failed on Python ${{ matrix.python-version }}"
+
+      - name: Pull request note
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "PR #${{ github.event.pull_request.number }} -> ${{ github.base_ref }}"
+          echo "Deploy is skipped for pull requests."
+
+  # --------------------------------------------------------------- 3. DEPLOY
+  deploy:
+    name: Deploy to prod
+    needs: [build, test]
+    # Runs ONLY on a push to main - never on pull requests or other branches.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-build
+
+      - name: Inspect artifact
+        run: |
+          ls -la ./*.tar.gz
+          tar tzf "${APP_NAME}"-*.tar.gz
+          tar xzf "${APP_NAME}"-*.tar.gz ./BUILD_INFO -O
+
+      - name: Deploy (simulation)
+        run: |
+          echo "=== Deployment ==="
+          echo "App:         ${APP_NAME}"
+          echo "Version:     ${{ needs.build.outputs.version }}"
+          echo "Environment: production"
+          echo "Timestamp:   $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "Status:      SUCCESS"
+
+      - name: Deployment summary
+        run: |
+          {
+            echo "### Deployed to production"
+            echo ""
+            echo "- Version: \`${{ needs.build.outputs.version }}\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # --------------------------------------------------------------- 4. STATUS
+  status:
+    name: Status report
+    needs: [build, test, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pipeline summary
+        run: |
+          {
+            echo "## Lesson 25 pipeline summary"
+            echo ""
+            echo "| Job | Result |"
+            echo "|---|---|"
+            echo "| Build | ${{ needs.build.result }} |"
+            echo "| Test | ${{ needs.test.result }} |"
+            echo "| Deploy | ${{ needs.deploy.result }} |"
+            echo ""
+            echo "Event: \`${{ github.event_name }}\` | Ref: \`${{ github.ref }}\` | Version: \`${{ needs.build.outputs.version }}\`"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy skipped explanation
+        if: needs.deploy.result == 'skipped'
+        run: echo "::notice::Deploy was skipped - it runs only on push to main."
+
+      - name: Fail if build or test failed
+        if: needs.build.result != 'success' || needs.test.result != 'success'
+        run: |
+          echo "::error::Pipeline failed (build=${{ needs.build.result }}, test=${{ needs.test.result }})"
+          exit 1

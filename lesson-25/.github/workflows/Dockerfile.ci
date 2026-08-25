@@ -1,6 +1,0 @@
-ARG PY=3.12
-FROM python:${PY}-slim
-WORKDIR /app
-RUN pip install --no-cache-dir pytest flake8
-COPY lesson-25/app/ .
-CMD flake8 . --max-line-length=100 && pytest -v
