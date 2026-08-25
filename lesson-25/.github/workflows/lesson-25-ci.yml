@@ -1,0 +1,144 @@
+name: Lesson 25 - CI/CD (python-hw23)
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  APP_NAME: python-hw23
+  APP_DIR: lesson-25/app
+  APP_VERSION: "1.0.0"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Compile sources (syntax check)
+        run: python -m compileall -q ${{ env.APP_DIR }}
+
+      - name: Determine version
+        id: version
+        run: |
+          VERSION="${APP_VERSION}-$(git rev-parse --short HEAD)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Build version: $VERSION"
+
+      - name: Package application
+        run: |
+          mkdir -p dist
+          cp ${{ env.APP_DIR }}/*.py dist/
+          rm -f dist/test_*.py
+          {
+            echo "app=${APP_NAME}"
+            echo "version=${{ steps.version.outputs.version }}"
+            echo "commit=${{ github.sha }}"
+            echo "branch=${{ github.ref_name }}"
+            echo "built=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          } > dist/BUILD_INFO
+          tar czf ${APP_NAME}-${{ steps.version.outputs.version }}.tar.gz -C dist .
+          ls -la *.tar.gz
+
+      - name: Upload artifact (main only)
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-build
+          path: ${{ env.APP_NAME }}-*.tar.gz
+          retention-days: 30
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test tools
+        run: pip install pytest flake8
+
+      - name: Lint (flake8)
+        run: flake8 ${{ env.APP_DIR }} --max-line-length=100
+
+      - name: Run tests
+        working-directory: ${{ env.APP_DIR }}
+        run: pytest -v
+
+      - name: Report failure
+        if: failure()
+        run: echo "::error::Tests failed on Python ${{ matrix.python-version }}"
+
+      - name: PR note
+        if: github.event_name == 'pull_request'
+        run: echo "Running for PR #${{ github.event.pull_request.number }} -> ${{ github.base_ref }}"
+
+  deploy:
+    name: Deploy to prod
+    needs: [build, test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-build
+
+      - name: Inspect artifact
+        run: |
+          ls -la *.tar.gz
+          tar tzf ${APP_NAME}-*.tar.gz
+
+      - name: Deploy (simulation)
+        run: |
+          echo "=== Deployment ==="
+          echo "App:         ${APP_NAME}"
+          echo "Version:     ${{ needs.build.outputs.version }}"
+          echo "Environment: production"
+          echo "Timestamp:   $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "Status:      SUCCESS"
+
+  status:
+    name: Status report
+    needs: [build, test, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary
+        run: |
+          {
+            echo "## Pipeline summary"
+            echo "| Job | Result |"
+            echo "|---|---|"
+            echo "| Build | ${{ needs.build.result }} |"
+            echo "| Test | ${{ needs.test.result }} |"
+            echo "| Deploy | ${{ needs.deploy.result }} |"
+            echo ""
+            echo "Event: \`${{ github.event_name }}\`, ref: \`${{ github.ref }}\`, version: \`${{ needs.build.outputs.version }}\`"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if build or test failed
+        if: needs.build.result != 'success' || needs.test.result != 'success'
+        run: exit 1
