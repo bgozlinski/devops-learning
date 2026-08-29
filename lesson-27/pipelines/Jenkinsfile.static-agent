@@ -1,0 +1,100 @@
+// Lekcja 27 - zadanie domowe 1
+// Pipeline wymuszony na stalym agencie podlaczonym po SSH.
+// Sprawdza tozsamosc wezla, parametry systemu i zmienna srodowiskowa wezla.
+
+pipeline {
+    // Etykieta nadana wezlowi w jenkins/casc/jenkins.yaml.
+    // Build nie ruszy, dopoki ten konkretny agent nie bedzie online.
+    agent { label 'linux-worker-01' }
+
+    options {
+        timestamps()
+        timeout(time: 10, unit: 'MINUTES')
+    }
+
+    environment {
+        EXPECTED_NODE_ENV = 'production'
+    }
+
+    stages {
+
+        // 1. Czy build naprawde poszedl na agenta, a nie na kontroler?
+        stage('Agent identity') {
+            steps {
+                echo "Build wykonywany na wezle: ${env.NODE_NAME} (etykiety: ${env.NODE_LABELS})"
+                sh 'hostname'
+                sh 'whoami'
+                sh 'pwd'
+                sh 'java -version'
+                script {
+                    if (env.NODE_NAME == 'built-in') {
+                        error('Build trafil na kontroler zamiast na agenta.')
+                    }
+                }
+            }
+        }
+
+        // 2. Parametry systemu agenta (wymaganie z tresci zadania).
+        stage('System check') {
+            steps {
+                sh 'uname -a'
+                sh 'free -m'
+                sh 'df -h /'
+                sh 'nproc'
+                sh 'cat /etc/os-release | head -2'
+            }
+        }
+
+        // 3. Weryfikacja zmiennej srodowiskowej zdefiniowanej na wezle.
+        //    NODE_ENV nie jest ustawiane w tym pliku - pochodzi z konfiguracji
+        //    wezla (nodeProperties -> envVars), wiec jest dowodem, ze build
+        //    dziedziczy srodowisko agenta.
+        stage('Verify NODE_ENV') {
+            steps {
+                script {
+                    echo "NODE_ENV widziane przez Groovy: ${env.NODE_ENV}"
+                    if (env.NODE_ENV != env.EXPECTED_NODE_ENV) {
+                        error("NODE_ENV = '${env.NODE_ENV}', oczekiwano '${env.EXPECTED_NODE_ENV}'. " +
+                              'Sprawdz konfiguracje wezla (Node Properties -> Environment variables).')
+                    }
+                }
+                // To samo z poziomu powloki - zmienna musi byc widoczna dla krokow sh.
+                sh '''
+                    echo "NODE_ENV widziane przez sh: ${NODE_ENV}"
+                    echo "AGENT_ROLE: ${AGENT_ROLE}"
+                    test "${NODE_ENV}" = "production"
+                '''
+            }
+        }
+
+        // 4. Krotki build korzystajacy ze srodowiska agenta.
+        stage('Workspace smoke test') {
+            steps {
+                sh '''
+                    mkdir -p build
+                    {
+                      echo "node=${NODE_NAME}"
+                      echo "host=$(hostname)"
+                      echo "user=$(whoami)"
+                      echo "node_env=${NODE_ENV}"
+                      echo "build=${BUILD_NUMBER}"
+                    } > build/agent-info.txt
+                    cat build/agent-info.txt
+                '''
+                archiveArtifacts artifacts: 'build/agent-info.txt', fingerprint: true
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Agent ${env.NODE_NAME} dziala poprawnie, NODE_ENV=${env.NODE_ENV}."
+        }
+        failure {
+            echo 'Build nie powiodl sie - sprawdz status wezla w Manage Jenkins -> Nodes.'
+        }
+        always {
+            echo "Wynik: ${currentBuild.currentResult}, czas: ${currentBuild.durationString}"
+        }
+    }
+}

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+build/
+deploy/
+test-results/
+.idea/

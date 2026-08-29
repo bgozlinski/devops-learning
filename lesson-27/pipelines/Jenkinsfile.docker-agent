@@ -1,0 +1,86 @@
+// Lekcja 27 - zadanie domowe 2
+// Pipeline wymuszony na agencie tworzonym na zadanie w kontenerze Docker.
+// Etykieta 'docker-agent' pochodzi z szablonu chmury zdefiniowanego
+// w jenkins/casc/jenkins.yaml - Jenkins startuje kontener przed buildem
+// i usuwa go po jego zakonczeniu.
+
+pipeline {
+    // agent none na poziomie pipeline'u: kazdy etap sam prosi o wezel,
+    // dzieki czemu widac, ze kontenery powstaja i znikaja niezaleznie.
+    agent none
+
+    options {
+        timestamps()
+        timeout(time: 15, unit: 'MINUTES')
+    }
+
+    stages {
+
+        // 1. Podstawowe sprawdzenie srodowiska kontenera (wymaganie z tresci zadania).
+        stage('Container info') {
+            agent { label 'docker-agent' }
+            steps {
+                echo "Build wykonywany na wezle: ${env.NODE_NAME} (etykiety: ${env.NODE_LABELS})"
+                sh 'cat /etc/os-release'
+                sh 'hostname'
+                sh 'whoami'
+                sh 'pwd'
+                sh 'java -version'
+                sh 'uname -a'
+                sh 'nproc'
+                sh 'free -m'
+                script {
+                    if (env.NODE_NAME == 'built-in' || env.NODE_NAME == 'linux-worker-01') {
+                        error("Build trafil na ${env.NODE_NAME} zamiast na agenta w kontenerze.")
+                    }
+                }
+            }
+        }
+
+        // 2. Dowod na skalowanie: dwa rownolegle etapy prosza o etykiete
+        //    'docker-agent' jednoczesnie, wiec chmura musi wystartowac
+        //    dwa osobne kontenery (Instance Capacity = 2).
+        stage('Auto-scaling') {
+            parallel {
+                stage('worker A') {
+                    agent { label 'docker-agent' }
+                    steps {
+                        sh 'echo "worker A na $(hostname)"; sleep 20'
+                    }
+                }
+                stage('worker B') {
+                    agent { label 'docker-agent' }
+                    steps {
+                        sh 'echo "worker B na $(hostname)"; sleep 20'
+                    }
+                }
+            }
+        }
+
+        // 3. Kazdy build dostaje czysty kontener - workspace nie przenosi sie
+        //    miedzy uruchomieniami, wiec plik zawsze tworzony jest od zera.
+        stage('Ephemeral workspace') {
+            agent { label 'docker-agent' }
+            steps {
+                sh '''
+                    test ! -f build/marker.txt && echo "workspace jest czysty"
+                    mkdir -p build
+                    {
+                      echo "node=${NODE_NAME}"
+                      echo "container=$(hostname)"
+                      echo "image=lesson27-docker-agent:jdk21"
+                      echo "build=${BUILD_NUMBER}"
+                    } > build/marker.txt
+                    cat build/marker.txt
+                '''
+                archiveArtifacts artifacts: 'build/marker.txt', fingerprint: true
+            }
+        }
+    }
+
+    post {
+        always {
+            echo "Wynik: ${currentBuild.currentResult}, czas: ${currentBuild.durationString}"
+        }
+    }
+}
