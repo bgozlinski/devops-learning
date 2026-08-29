@@ -1,0 +1,117 @@
+# Konfiguracja jako kod (JCasC) - cala konfiguracja agentow z lekcji 27.
+# Plik jest montowany do kontrolera jako /var/jenkins_config/jenkins.yaml
+# (zmienna CASC_JENKINS_CONFIG), wiec zadnego klikania w UI nie trzeba powtarzac.
+jenkins:
+  systemMessage: "Lekcja 27 - agenci Jenkins (staly agent SSH + chmura Docker)"
+
+  # Najlepsza praktyka z lekcji: na kontrolerze nie uruchamiamy kompilacji.
+  numExecutors: 0
+  mode: EXCLUSIVE
+  labelString: "built-in"
+
+  # Staly port dla agentow laczacych sie do kontrolera (inbound / JNLP).
+  # Ten sam port jest publikowany w docker-compose.yml.
+  slaveAgentPort: 50000
+
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "${JENKINS_ADMIN_ID:-admin}"
+          password: "${JENKINS_ADMIN_PASSWORD:-admin123}"
+
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+  # ------------------------------------------------------------------
+  # Zadanie domowe 1 - staly agent na osobnej maszynie, podlaczany po SSH.
+  # ------------------------------------------------------------------
+  nodes:
+    - permanent:
+        name: "linux-worker-01"
+        nodeDescription: "Ubuntu 22.04, agent statyczny podlaczany po SSH"
+        # Etykiety: pipeline wybiera ten wezel przez agent { label 'linux-worker-01' }
+        labelString: "linux-worker-01 linux ubuntu"
+        remoteFS: "/home/jenkins/agent"
+        numExecutors: 2
+        mode: NORMAL
+        retentionStrategy: "always"
+        # Zmienna srodowiskowa wezla - widoczna dla kazdego builda na tym agencie.
+        nodeProperties:
+          - envVars:
+              env:
+                - key: "NODE_ENV"
+                  value: "production"
+                - key: "AGENT_ROLE"
+                  value: "linux-worker"
+        launcher:
+          ssh:
+            host: "linux-worker-01"
+            port: 22
+            credentialsId: "linux-worker-01-ssh"
+            launchTimeoutSeconds: 120
+            maxNumRetries: 5
+            retryWaitTime: 10
+            # W labie klucz hosta jest za kazdym razem nowy (obraz budowany lokalnie).
+            # Na produkcji: ManuallyTrustedKeyVerificationStrategy lub known_hosts.
+            sshHostKeyVerificationStrategy: "nonVerifyingKeyVerificationStrategy"
+
+  # ------------------------------------------------------------------
+  # Zadanie domowe 2 - chmura Docker: agenci tworzeni i usuwani na zadanie.
+  # ------------------------------------------------------------------
+  clouds:
+    - docker:
+        name: "docker"
+        dockerApi:
+          dockerHost:
+            uri: "${DOCKER_HOST_URI:-unix:///var/run/docker.sock}"
+          connectTimeout: 10
+          readTimeout: 60
+        templates:
+          - name: "docker-agent-template"
+            labelString: "docker-agent"
+            # Maksymalnie 2 rownoczesne kontenery-agenci (jak w PDF-ie).
+            instanceCapStr: "2"
+            remoteFs: "/home/jenkins/agent"
+            # Kontener jest usuwany po zakonczeniu builda - stad "1".
+            # Obraz jest budowany lokalnie (jenkins/docker-agent.Dockerfile),
+            # wiec plugin nie moze go szukac w rejestrze - stad PULL_NEVER.
+            pullStrategy: PULL_NEVER
+            dockerTemplateBase:
+              image: "lesson27-docker-agent:jdk21"
+              # Ta sama siec co kontroler - dzieki temu agent widzi go pod nazwa "jenkins".
+              network: "${AGENT_NETWORK:-lesson27-net}"
+            connector:
+              # Agent sam laczy sie do kontrolera (inbound / JNLP).
+              # Adres jest nazwa serwisu z docker-compose.yml - dziala,
+              # bo kontenery-agenci startuja w tej samej sieci.
+              jnlp:
+                jenkinsUrl: "http://jenkins:8080/"
+                user: "jenkins"
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: "linux-worker-01-ssh"
+              username: "jenkins"
+              password: "jenkins123"
+              description: "Konto agenta na maszynie linux-worker-01"
+
+security:
+  # Skrypty Job DSL ponizej pochodza z tego repozytorium i sa ladowane
+  # przez JCasC, wiec w labie nie wymagaja recznej akceptacji.
+  globalJobDslSecurityConfiguration:
+    useScriptSecurity: false
+
+unclassified:
+  location:
+    url: "http://localhost:8080/"
+    adminAddress: "bartlomiej.gozlinski@gmail.com"
+
+# Pipeline'y testowe obu zadan domowych - tworzone razem z konfiguracja.
+jobs:
+  - file: /var/jenkins_config/jobs.groovy

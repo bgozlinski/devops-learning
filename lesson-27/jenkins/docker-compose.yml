@@ -1,0 +1,75 @@
+# Stala nazwa projektu - inaczej Compose bierze ja z katalogu "jenkins"
+# i lab dzieli wolumen z labem z lekcji 26.
+name: lesson-27
+
+# Lab do lekcji 27 - kontroler Jenkins + dwa zrodla agentow.
+#
+#   docker compose -f jenkins/docker-compose.yml up -d --build
+#   http://localhost:8080  (admin / admin123)
+#
+# linux-worker-01 - staly agent SSH (zadanie domowe 1)
+# chmura "docker" - agenci tworzeni na zadanie z obrazu (zadanie domowe 2);
+#                   kontener kontrolera dostaje gniazdo demona Dockera hosta,
+#                   wiec kontenery-agenci powstaja obok niego w sieci lesson27-net.
+services:
+
+  jenkins:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lesson27-jenkins
+    container_name: lesson27-jenkins
+    hostname: jenkins
+    restart: unless-stopped
+    # Dostep do /var/run/docker.sock - wylacznie na potrzeby labu.
+    # Na produkcji uzywa sie osobnego hosta Dockera po TCP+TLS (patrz README).
+    user: root
+    ports:
+      - "8080:8080"    # web UI
+      - "50000:50000"  # agenci inbound (JNLP)
+    environment:
+      CASC_JENKINS_CONFIG: /var/jenkins_config/jenkins.yaml
+      JENKINS_ADMIN_ID: admin
+      JENKINS_ADMIN_PASSWORD: admin123
+      # adres demona Dockera uzywany przez chmure agentow
+      DOCKER_HOST_URI: unix:///var/run/docker.sock
+      AGENT_NETWORK: lesson27-net
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - ./casc:/var/jenkins_config:ro
+      - ../pipelines:/var/jenkins_pipelines:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - lesson27-net
+    depends_on:
+      - linux-worker-01
+
+  # "Maszyna wirtualna" z agentem statycznym (zadanie domowe 1).
+  linux-worker-01:
+    build:
+      context: .
+      dockerfile: agent.Dockerfile
+    image: lesson27-agent
+    container_name: lesson27-linux-worker-01
+    hostname: linux-worker-01
+    restart: unless-stopped
+    networks:
+      - lesson27-net
+
+  # Obraz agenta dla chmury Docker (zadanie domowe 2).
+  # Serwis istnieje tylko po to, zeby "docker compose build" zbudowal obraz -
+  # kontenery z niego tworzy juz sam Jenkins, na zadanie.
+  docker-agent-image:
+    build:
+      context: .
+      dockerfile: docker-agent.Dockerfile
+    image: lesson27-docker-agent:jdk21
+    profiles: ["build-only"]
+
+volumes:
+  jenkins_home:
+
+networks:
+  lesson27-net:
+    # stala nazwa - ta sama trafia do szablonu agenta Docker w casc/jenkins.yaml
+    name: lesson27-net
