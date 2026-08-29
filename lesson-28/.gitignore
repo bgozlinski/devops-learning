@@ -1,0 +1,8 @@
+# Access keys and anything else AWS hands back as a secret - never commit these.
+.secrets/
+evidence/
+*.csv
+credentials
+*accesskey*.json
+downloaded.txt
+test.txt
